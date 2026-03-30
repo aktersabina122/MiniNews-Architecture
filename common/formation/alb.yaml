@@ -1,0 +1,64 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ALB stack for mini news platform
+
+Resources:
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALB SG
+      VpcId: !ImportValue mini-news-vpc-id
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  FrontendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !ImportValue mini-news-vpc-id
+      Port: 80
+      Protocol: HTTP
+      TargetType: instance
+      HealthCheckEnabled: true
+      HealthCheckPath: /health
+      Matcher:
+        HttpCode: 200
+
+  MiniNewsALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: mini-news-alb
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !ImportValue mini-news-public-subnet-a
+        - !ImportValue mini-news-public-subnet-b
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref MiniNewsALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref FrontendTargetGroup
+
+Outputs:
+  AlbSecurityGroupId:
+    Value: !Ref AlbSecurityGroup
+    Export:
+      Name: mini-news-alb-sg-id
+
+  FrontendTargetGroupArn:
+    Value: !Ref FrontendTargetGroup
+    Export:
+      Name: mini-news-frontend-tg-arn
+
+  AlbDnsName:
+    Value: !GetAtt MiniNewsALB.DNSName
+    Export:
+      Name: mini-news-alb-dns

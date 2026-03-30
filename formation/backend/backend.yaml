@@ -1,0 +1,138 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Backend stack for mini news platform
+
+Parameters:
+  AmiId:
+    Type: AWS::EC2::Image::Id
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+  InstanceType:
+    Type: String
+    Default: t3.micro
+
+Resources:
+  BackendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Backend SG
+      VpcId: !ImportValue mini-news-vpc-id
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5000
+          ToPort: 5000
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+  BackendInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !ImportValue mini-news-public-subnet-a
+      SecurityGroupIds:
+        - !Ref BackendSecurityGroup
+      Tags:
+        - Key: Name
+          Value: mini-news-backend
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -eux
+
+          yum update -y
+          yum install -y python3 python3-pip
+          pip3 install flask flask-cors
+
+          mkdir -p /opt/backend
+
+          cat > /opt/backend/app.py <<'EOF'
+          from flask import Flask, jsonify
+          from flask_cors import CORS
+
+          app = Flask(__name__)
+          CORS(app)
+
+          articles = [
+              {
+                  "id": 1,
+                  "title": "Breaking News: Cloud Platforms Are Evolving",
+                  "category": "Technology",
+                  "author": "News Desk",
+                  "summary": "A quick update on cloud and platform engineering trends.",
+                  "content": "Cloud platforms continue to evolve with stronger automation, observability, and scalability patterns."
+              },
+              {
+                  "id": 2,
+                  "title": "Sports Update: Dramatic Final Ends in Last Minute",
+                  "category": "Sports",
+                  "author": "Sports Desk",
+                  "summary": "Fans celebrated after a dramatic finish in the final match.",
+                  "content": "The final match ended with a thrilling result after a last-minute winning score."
+              },
+              {
+                  "id": 3,
+                  "title": "Business Insight: Markets Show Steady Recovery",
+                  "category": "Business",
+                  "author": "Finance Desk",
+                  "summary": "Analysts continue to watch growth and spending trends.",
+                  "content": "Markets remained stable this week as investors tracked inflation and consumer data."
+              }
+          ]
+
+          @app.route('/api/articles')
+          def get_articles():
+              return jsonify(articles)
+
+          @app.route('/api/articles/<int:article_id>')
+          def get_article(article_id):
+              article = next((a for a in articles if a["id"] == article_id), None)
+              if article:
+                  return jsonify(article)
+              return jsonify({"error": "Article not found"}), 404
+
+          @app.route('/api/categories/<category_name>')
+          def get_articles_by_category(category_name):
+              filtered = [a for a in articles if a["category"].lower() == category_name.lower()]
+              return jsonify(filtered)
+
+          @app.route('/api/health')
+          def health():
+              return jsonify({"status": "ok", "service": "backend"})
+
+          app.run(host='0.0.0.0', port=5000)
+          EOF
+
+          cat > /etc/systemd/system/backend.service <<'EOF'
+          [Unit]
+          Description=Mini News Backend
+          After=network.target
+
+          [Service]
+          WorkingDirectory=/opt/backend
+          ExecStart=/usr/bin/python3 /opt/backend/app.py
+          Restart=always
+          RestartSec=3
+          User=root
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          systemctl daemon-reload
+          systemctl enable backend
+          systemctl start backend
+
+Outputs:
+  BackendPublicDns:
+    Value: !GetAtt BackendInstance.PublicDnsName
+    Export:
+      Name: mini-news-backend-public-dns
+
+  BackendBaseUrl:
+    Value: !Sub "http://${BackendInstance.PublicDnsName}:5000"
+    Export:
+      Name: mini-news-backend-base-url

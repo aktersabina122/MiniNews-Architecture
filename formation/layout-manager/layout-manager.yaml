@@ -1,0 +1,103 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Layout Manager stack for mini news platform
+
+Parameters:
+  AmiId:
+    Type: AWS::EC2::Image::Id
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+  InstanceType:
+    Type: String
+    Default: t3.micro
+
+Resources:
+  LayoutManagerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Layout Manager SG
+      VpcId: !ImportValue mini-news-vpc-id
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 4000
+          ToPort: 4000
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+  LayoutManagerInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !ImportValue mini-news-public-subnet-a
+      SecurityGroupIds:
+        - !Ref LayoutManagerSecurityGroup
+      Tags:
+        - Key: Name
+          Value: mini-news-layout-manager
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -eux
+
+          yum update -y
+          yum install -y python3 python3-pip
+          pip3 install flask flask-cors
+
+          mkdir -p /opt/layout-manager
+
+          cat > /opt/layout-manager/app.py <<'EOF'
+          from flask import Flask, jsonify
+          from flask_cors import CORS
+
+          app = Flask(__name__)
+          CORS(app)
+
+          @app.route('/layout/homepage')
+          def homepage():
+              return jsonify({
+                  "hero": 1,
+                  "topStories": [2, 3],
+                  "sectionOrder": ["Technology", "Sports", "Business"]
+              })
+
+          @app.route('/layout/health')
+          def health():
+              return jsonify({"status": "ok", "service": "layout-manager"})
+
+          app.run(host='0.0.0.0', port=4000)
+          EOF
+
+          cat > /etc/systemd/system/layout-manager.service <<'EOF'
+          [Unit]
+          Description=Mini News Layout Manager
+          After=network.target
+
+          [Service]
+          WorkingDirectory=/opt/layout-manager
+          ExecStart=/usr/bin/python3 /opt/layout-manager/app.py
+          Restart=always
+          RestartSec=3
+          User=root
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          systemctl daemon-reload
+          systemctl enable layout-manager
+          systemctl start layout-manager
+
+Outputs:
+  LayoutManagerPublicDns:
+    Value: !GetAtt LayoutManagerInstance.PublicDnsName
+    Export:
+      Name: mini-news-layout-manager-public-dns
+
+  LayoutManagerBaseUrl:
+    Value: !Sub "http://${LayoutManagerInstance.PublicDnsName}:4000"
+    Export:
+      Name: mini-news-layout-manager-base-url
