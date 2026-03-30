@@ -2,13 +2,13 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: Frontend stack with Nginx reverse proxy and Node.js app
 
 Parameters:
-AmiId:
-Type: AWS::EC2::Image::Id
-KeyName:
-Type: AWS::EC2::KeyPair::KeyName
-InstanceType:
-Type: String
-Default: t3.micro
+  AmiId:
+    Type: AWS::EC2::Image::Id
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+  InstanceType:
+    Type: String
+    Default: t3.micro
 
 Resources:
 FrontendSecurityGroup:
