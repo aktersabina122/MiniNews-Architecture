@@ -4,245 +4,123 @@ Description: Frontend stack with Nginx reverse proxy and Node.js app
 Parameters:
   AmiId:
     Type: AWS::EC2::Image::Id
+
   KeyName:
     Type: AWS::EC2::KeyPair::KeyName
+
   InstanceType:
     Type: String
     Default: t3.micro
 
 Resources:
-FrontendSecurityGroup:
-Type: AWS::EC2::SecurityGroup
-Properties:
-GroupDescription: Frontend SG
-VpcId: !ImportValue mini-news-vpc-id
-SecurityGroupIngress:
-- IpProtocol: tcp
-FromPort: 80
-ToPort: 80
-SourceSecurityGroupId: !ImportValue mini-news-alb-sg-id
-- IpProtocol: tcp
-FromPort: 22
-ToPort: 22
-CidrIp: 0.0.0.0/0
 
-FrontendLaunchTemplate:
-Type: AWS::EC2::LaunchTemplate
-Properties:
-LaunchTemplateData:
-ImageId: !Ref AmiId
-InstanceType: !Ref InstanceType
-KeyName: !Ref KeyName
-SecurityGroupIds:
-- !Ref FrontendSecurityGroup
-UserData:
-Fn::Base64:
-Fn::Sub:
-- |
-#!/bin/bash
-set -eux
+  FrontendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Frontend SG
+      VpcId: !ImportValue mini-news-vpc-id
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !ImportValue mini-news-alb-sg-id
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
 
-yum update -y
-yum install -y python3 python3-pip gcc-c++ make
+  FrontendLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref AmiId
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref KeyName
+        SecurityGroupIds:
+          - !Ref FrontendSecurityGroup
+        UserData:
+          Fn::Base64:
+            Fn::Sub:
+              - |
+                #!/bin/bash
+                set -eux
 
-curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
-yum install -y nodejs
+                yum update -y
+                yum install -y nodejs npm nginx
 
-amazon-linux-extras install nginx1 -y || yum install -y nginx
+                mkdir -p /opt/frontend
+                cd /opt/frontend
 
-mkdir -p /opt/frontend
-cd /opt/frontend
-npm init -y
-npm install express axios
+                cat > index.js <<'EOF'
+                const http = require('http');
 
-cat > /opt/frontend/index.js <<'EOF'
-const express = require("express");
-const axios = require("axios");
+                const BACKEND_URL = "__BACKEND_URL__";
+                const LM_URL = "__LM_URL__";
 
-const app = express();
-const PORT = 3000;
-const BACKEND_URL = "__BACKEND_URL__";
-const LM_URL = "__LM_URL__";
+                const server = http.createServer(async (req, res) => {
+                  res.writeHead(200, {'Content-Type': 'text/html'});
 
-function pageTemplate(title, body) {
-return '<!DOCTYPE html>' +
-'<html>' +
-'<head>' +
-'<title>' + title + '</title>' +
-'<style>' +
-'body { font-family: Arial, sans-serif; max-width: 1000px; margin: 0 auto; padding: 20px; background: #f4f4f4; }' +
-'header { background: #111; color: white; padding: 20px; margin-bottom: 20px; }' +
-'header a { color: white; margin-right: 15px; text-decoration: none; font-weight: bold; }' +
-'.card { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }' +
-'.meta { color: #666; font-size: 14px; margin-bottom: 10px; }' +
-'</style>' +
-'</head>' +
-'<body>' +
-'<header>' +
-'<h1>Mini News Platform</h1>' +
-'<nav>' +
-'<a href="/">Home</a>' +
-'<a href="/category/Technology">Technology</a>' +
-'<a href="/category/Sports">Sports</a>' +
-'<a href="/category/Business">Business</a>' +
-'</nav>' +
-'</header>' +
-body +
-'</body>' +
-'</html>';
-}
+                  res.end(`
+                    "<h1>Mini News Frontend</h1>" +
+                    "<p>Backend: " + BACKEND_URL + </p>" +
+                    "<p>Layout Manager: " + LM_URL + "</p>"
+                  `);
+                });
 
-app.get("/", async (req, res) => {
-try {
-const layoutResp = await axios.get(LM_URL + "/layout/homepage");
-const articlesResp = await axios.get(BACKEND_URL + "/api/articles");
+                server.listen(3000, '0.0.0.0', () => {
+                  console.log("Frontend running");
+                });
+                EOF
 
-const layout = layoutResp.data;
-const articles = articlesResp.data;
+                sed -i 's|__BACKEND_URL__|${BackendUrl}|g' /opt/frontend/index.js
+                sed -i 's|__LM_URL__|${LmUrl}|g' /opt/frontend/index.js
 
-let body = '<div class="card"><h2>Homepage Layout</h2>' +
-'<p><strong>Hero Article ID:</strong> ' + layout.hero + '</p>' +
-'<p><strong>Top Stories:</strong> ' + layout.topStories.join(", ") + '</p>' +
-'<p><strong>Sections:</strong> ' + layout.sectionOrder.join(", ") + '</p></div>';
+                cat > /etc/systemd/system/frontend.service <<'EOF'
+                [Unit]
+                Description=Frontend App
+                After=network.target
 
-articles.forEach(article => {
-body += '<div class="card">' +
-'<h2>' + article.title + '</h2>' +
-'<div class="meta">Category: ' + article.category + ' | Author: ' + article.author + '</div>' +
-'<p>' + article.summary + '</p>' +
-'<a href="/article/' + article.id + '">Read article</a>' +
-'</div>';
-});
+                [Service]
+                ExecStart=/usr/bin/node /opt/frontend/index.js
+                Restart=always
 
-res.send(pageTemplate("Mini News Platform", body));
-} catch (err) {
-res.status(500).send(pageTemplate("Error",
-'<div class="card"><h2>Error loading homepage</h2><p>' + err.message + '</p></div>'
-));
-}
-});
+                [Install]
+                WantedBy=multi-user.target
+                EOF
 
-app.get("/article/:id", async (req, res) => {
-try {
-const resp = await axios.get(BACKEND_URL + "/api/articles/" + req.params.id);
-const article = resp.data;
+                systemctl daemon-reexec
+                systemctl daemon-reload
+                systemctl enable frontend
+                systemctl start frontend
 
-const body = '<div class="card">' +
-'<h2>' + article.title + '</h2>' +
-'<div class="meta">Category: ' + article.category + ' | Author: ' + article.author + '</div>' +
-'<p><strong>' + article.summary + '</strong></p>' +
-'<p>' + article.content + '</p>' +
-'<a href="/">Back to Home</a>' +
-'</div>';
+                cat > /etc/nginx/conf.d/frontend.conf <<'EOF'
+                server {
+                    listen 80;
 
-res.send(pageTemplate(article.title, body));
-} catch (err) {
-res.status(404).send(pageTemplate("Not Found",
-"<div class='card'><h2>Article not found</h2><a href='/'>Home</a></div>"
-));
-}
-});
+                    location / {
+                        proxy_pass http://127.0.0.1:3000;
+                    }
+                }
+                EOF
 
-app.get("/category/:name", async (req, res) => {
-try {
-const resp = await axios.get(BACKEND_URL + "/api/categories/" + req.params.name);
-const articles = resp.data;
+                systemctl enable nginx
+                systemctl restart nginx
 
-let body = '<div class="card"><h2>Category: ' + req.params.name + '</h2></div>';
+              - {
+                  BackendUrl: { "Fn::ImportValue": "mini-news-backend-base-url" },
+                  LmUrl: { "Fn::ImportValue": "mini-news-layout-manager-base-url" }
+                }
 
-if (articles.length === 0) {
-body += '<div class="card"><p>No articles found.</p></div>';
-} else {
-articles.forEach(article => {
-body += '<div class="card">' +
-'<h2>' + article.title + '</h2>' +
-'<div class="meta">Category: ' + article.category + ' | Author: ' + article.author + '</div>' +
-'<p>' + article.summary + '</p>' +
-'<a href="/article/' + article.id + '">Read article</a>' +
-'</div>';
-});
-}
-
-res.send(pageTemplate(req.params.name, body));
-} catch (err) {
-res.status(500).send(pageTemplate("Error",
-"<div class='card'><h2>Error loading category</h2></div>"
-));
-}
-});
-
-app.get("/health", (req, res) => {
-res.status(200).send("ok");
-});
-
-app.listen(PORT, "0.0.0.0", () => {
-console.log("Frontend running on port " + PORT);
-});
-EOF
-
-sed -i 's|__BACKEND_URL__|${BackendUrl}|g' /opt/frontend/index.js
-sed -i 's|__LM_URL__|${LmUrl}|g' /opt/frontend/index.js
-
-cat > /etc/systemd/system/frontend.service <<'EOF'
-[Unit]
-Description=Mini News Frontend Node App
-After=network.target
-
-[Service]
-WorkingDirectory=/opt/frontend
-ExecStart=/usr/bin/node /opt/frontend/index.js
-Restart=always
-RestartSec=3
-User=root
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-cat > /etc/nginx/conf.d/frontend.conf <<'EOF'
-server {
-listen 80;
-server_name _;
-
-location / {
-proxy_pass http://127.0.0.1:3000;
-proxy_http_version 1.1;
-proxy_set_header Host $host;
-proxy_set_header X-Real-IP $remote_addr;
-proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-proxy_set_header X-Forwarded-Proto $scheme;
-}
-}
-EOF
-
-rm -f /etc/nginx/default.d/*.conf || true
-
-systemctl daemon-reload
-systemctl enable frontend
-systemctl start frontend
-
-nginx -t
-systemctl enable nginx
-systemctl restart nginx
-- {
-BackendUrl: { "Fn::ImportValue": "mini-news-backend-base-url" },
-LmUrl: { "Fn::ImportValue": "mini-news-layout-manager-base-url" }
-}
-
-FrontendASG:
-Type: AWS::AutoScaling::AutoScalingGroup
-Properties:
-MinSize: '1'
-MaxSize: '2'
-DesiredCapacity: '1'
-VPCZoneIdentifier:
-- !ImportValue mini-news-public-subnet-a
-LaunchTemplate:
-LaunchTemplateId: !Ref FrontendLaunchTemplate
-Version: !GetAtt FrontendLaunchTemplate.LatestVersionNumber
-TargetGroupARNs:
-- !ImportValue mini-news-frontend-tg-arn
-
-Outputs:
-FrontendSecurityGroupId:
-Value: !Ref FrontendSecurityGroup
+  FrontendASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      MinSize: '1'
+      MaxSize: '2'
+      DesiredCapacity: '1'
+      VPCZoneIdentifier:
+        - !ImportValue mini-news-public-subnet-a
+      LaunchTemplate:
+        LaunchTemplateId: !Ref FrontendLaunchTemplate
+        Version: !GetAtt FrontendLaunchTemplate.LatestVersionNumber
+      TargetGroupARNs:
+        - !ImportValue mini-news-frontend-tg-arn
